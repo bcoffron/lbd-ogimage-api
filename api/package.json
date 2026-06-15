@@ -1,0 +1,6 @@
+{
+  "name": "lbd-ogimage-api",
+  "version": "1.0.0",
+  "description": "Standalone og:image fetcher for Lunchbox Dad link-in-bio tool",
+  "type": "module"
+}
