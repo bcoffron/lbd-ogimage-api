@@ -3,7 +3,6 @@
 // No CORS issues since this runs server-side, not in the browser
 
 export default async function handler(req, res) {
-  // Allow your link page (and any subdomain) to call this
   const allowedOrigins = [
     'https://links.lunchboxdad.com',
     'https://bcoffron.github.io',
@@ -19,28 +18,36 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle preflight
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  const target = req.query.url;
-  if (!target || !/^https?:\/\//i.test(target)) {
-    return res.status(400).json({ error: 'Missing or invalid url parameter' });
+  let target = req.query.url;
+  if (!target) {
+    return res.status(400).json({ error: 'Missing url parameter' });
+  }
+  // Auto-add https:// if missing
+  if (!/^https?:\/\//i.test(target)) {
+    target = 'https://' + target;
   }
 
   try {
-    // Fetch the target page with a realistic browser user-agent
-    // so sites like Amazon/Walmart serve the full page with og tags
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10000);
+    const timeout = setTimeout(() => controller.abort(), 12000);
 
     const response = await fetch(target, {
       signal: controller.signal,
+      redirect: 'follow',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9'
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1'
       }
     });
     clearTimeout(timeout);
@@ -52,7 +59,6 @@ export default async function handler(req, res) {
     const html = await response.text();
     const image = extractImage(html, target);
 
-    // Cache successful results at the edge for 24 hours to reduce repeat fetches
     if (image) {
       res.setHeader('Cache-Control', 's-maxage=86400, stale-while-revalidate');
     }
@@ -91,6 +97,16 @@ function extractImage(html, baseUrl) {
   // Blogger fallback
   const blogger = html.match(/https:\/\/blogger\.googleusercontent\.com\/img\/[^\s"'<>]+/i);
   if (blogger) return blogger[0];
+
+  // Amazon-specific: landingImage or main product image
+  const amazonImg = html.match(/"(?:hiRes|large)":"(https:\/\/[^"]+\.jpg)"/i) ||
+                    html.match(/data-old-hires=["'](https:\/\/[^"']+)["']/i) ||
+                    html.match(/id=["']landingImage["'][^>]+src=["'](https:\/\/[^"']+)["']/i);
+  if (amazonImg && amazonImg[1]) return amazonImg[1];
+
+  // Walmart-specific: look for og image in JSON
+  const walmartImg = html.match(/"image":\s*"(https:\/\/i5\.walmartimages\.com\/[^"]+)"/i);
+  if (walmartImg && walmartImg[1]) return walmartImg[1].replace(/\\u002F/g, '/');
 
   // Generic: first reasonably large image
   const img = html.match(/<img[^>]+src=["']([^"']+\.(?:jpg|jpeg|png|webp)[^"']*)["']/i);
